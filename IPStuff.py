@@ -29,6 +29,9 @@ class IP_Pool:
 
     def __init__(self, configsObject):
         self.addressIP = [] # here we will store the ip addresses generated following the network address and the mask
+        self.reserved_ips = []
+        # reserve ips for macs
+        self.reserve_ips(configsObject['reservation_list'])
 
         #pool_mode == subnet
         if configsObject['pool_mode'] == 'subnet':
@@ -39,12 +42,20 @@ class IP_Pool:
         else:
             self.generate_ips_range(configsObject['range']['from'], configsObject['range']['to'])
 
-    def generate_ips_subnet(self, _ip, _mask):
-        self.network_address = _ip
+    def reserve_ips(self, reservation_list):
+        for mac, ip in reservation_list.items():
+            IPAddress = IP_Handler(ip)
+            IPAddress.setMac(mac)
+            IPAddress.set_IP_unavailable()
+            IPAddress.keep_IP_address()
+            self.reserved_ips.append(IPAddress)
+
+    def generate_ips_subnet(self, ip, mask):
+        self.network_address = ip
         self.broadcast_address = ""
         self.mask = []
 
-        for val in _mask.split('.'):
+        for val in mask.split('.'):
             self.mask.append(int(val))
 
         self.total_ips = 0
@@ -53,8 +64,7 @@ class IP_Pool:
             if self.mask[x] == 255:
                 continue
             else:
-                nr_zeroes_cur = 255 - self.mask[
-                    x] + 1  # e.g. 255-252 = 3 + 1 = 4; sqrt (4) = 2 = number of zeros in the current value mask: 11111100 = 252
+                nr_zeroes_cur = 255 - self.mask[x] + 1  # e.g. 255-252 = 3 + 1 = 4; sqrt (4) = 2 = number of zeros in the current value mask: 11111100 = 252
                 nr_zeroes += math.log2(nr_zeroes_cur)
 
         self.total_ips = 2 ** nr_zeroes  # as formula says : nrOfIPs = 2^x-2, where x is the no of 0's in the subnet mask;
@@ -62,7 +72,7 @@ class IP_Pool:
 
         # Build the address pool
         ip = []
-        for x in _ip.split('.'):
+        for x in ip.split('.'):
             ip.append(int(x))
         for i in range(1, int(self.total_ips)):
             ip[3] += 1
@@ -89,7 +99,7 @@ class IP_Pool:
         import socket, struct
         start = struct.unpack('>I', socket.inet_aton(start))[0]
         end = struct.unpack('>I', socket.inet_aton(end))[0]
-        self.addressIP = [socket.inet_ntoa(struct.pack('>I', i)) for i in range(start, end+1)]
+        self.addressIP = [IP_Handler(socket.inet_ntoa(struct.pack('>I', i))) for i in range(start, end+1)]
 
     def getFreeAddress(self, _mac):
         ip = None
@@ -134,13 +144,13 @@ class IP_Pool:
 
     def findIPObjByIPAddr(self, _ip):
         return_ip = ""
-        for ip in self.adreseIP:
+        for ip in self.addressIP:
             if ip.ip == _ip:
                 return ip
         return None
 
     def findIPByMac(self, _mac):
-        return [ip for ip in self.adreseIP if ip.mac == _mac]
+        return [ip for ip in self.addressIP if ip.mac == _mac]
 # if __name__ == '__main__':
 #     ap = AddressPool("192.168.1.0", "255.255.255.0")
 
@@ -155,4 +165,4 @@ configsObject = read_configs('configs.json')
 
 o = IP_Pool(configsObject)
 for i in o.addressIP:
-    print(i)
+    print(i.ip)
