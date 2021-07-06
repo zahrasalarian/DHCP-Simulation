@@ -50,6 +50,29 @@ def make_DHCP_message(configsObject, order, OFFER_elements):
     message = op + htype + hlen + hops + xid + secs + flags + ciaddr + yiaddr + siaddr + giaddr + chaddr + sname + file + options
     return message
 
+def decode_DHCP_message(message):
+    message_p1 = message[:16].decode()
+    elements = {}
+    elements['op'] = message_p1[0]
+    elements['htype'] = message_p1[1]
+    elements['hlen'] = message_p1[2]
+    elements['hops'] = message_p1[3]
+    elements['xid'] = message_p1[4:8]
+    elements['secs'] = message_p1[8:10]
+    elements['flags'] = message_p1[10:12]
+    elements['ciaddr'] = message_p1[12:16]
+    elements['yiaddr'] = socket.inet_ntoa(message[16:20])
+    message_p2 = message[20:].decode()
+    #elements['yiaddr'] = message_p2[16:20]
+    elements['siaddr'] = message_p2[0:4]
+    elements['giaddr'] = message_p2[4:8]
+    elements['chaddr'] = message_p2[8:24]
+    elements['sname'] = message_p2[24:88]
+    elements['file'] = message_p2[88:216]
+    elements['options'] = message_p2[216:]
+
+    return elements
+
 # read configs
 configsObject = read_configs('configs.json')
 print(configsObject['range'])
@@ -59,7 +82,7 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client_socket.bind((IP, Port))
 print("\nC:About to send a discover message")
 
-# Send 
+# Send DHCPDISCOVER
 message = make_DHCP_message(configsObject, 'DHCPDISCOVER', '')
 client_socket.sendto(message, ('localhost', 21))
 print("\nDHCPDISCOVER sent")
@@ -70,3 +93,10 @@ order = 'DHCPOFFER'
 OFFER_elements = ''
 xid = random.randint(1243,2324) if order == 'DHCPOFFER' else OFFER_elements['xid']
 #print(len("{:01b}".format(1) + "{:015b}".format(0)))
+
+# Receive DHCPOFFER
+DHCPOFFER_message = client_socket.recvfrom(4096)
+print('DHCPOFFER message Received.')
+DHCPOFFER_message_elements = decode_DHCP_message(DHCPOFFER_message[0])
+print(DHCPOFFER_message_elements['yiaddr'])
+

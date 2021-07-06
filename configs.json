@@ -1,5 +1,5 @@
 {
-	"pool_mode": "range",
+	"pool_mode": "subnet",
 	"range":{
 		"from": "192.168.1.2",
 		"to": "192.168.1.10"

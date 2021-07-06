@@ -57,8 +57,8 @@ class IP_Pool:
             IPAddress.keep_IP_address()
             self.reserved_ips.append(IPAddress)
 
-    def generate_ips_subnet(self, ip, mask):
-        self.network_address = ip
+    def generate_ips_subnet(self, in_ip, mask):
+        self.network_address = in_ip
         self.broadcast_address = ""
         self.mask = []
 
@@ -79,7 +79,7 @@ class IP_Pool:
 
         # Build the address pool
         ip = []
-        for x in ip.split('.'):
+        for x in in_ip.split('.'):
             ip.append(int(x))
         for i in range(1, int(self.total_ips)):
             ip[3] += 1
@@ -166,19 +166,46 @@ def read_configs(file_name):
         jsonObject = json.load(jsonFile)
         jsonFile.close()
     return jsonObject
-# read configs
-configsObject = read_configs('configs.json')
-black_list = configsObject['black_list']
 
 def make_DHCPOFFER_message(order, DISCOVER_elements):
     #macid = DISCOVER_elements['chaddr']
     #if macid in black_list:
     #    print('You are blocked')
     #    return
-    o = IP_Pool(configsObject)
-    print('hi')
-    for i in o.addressIP:
-        print(i.ip)
+
+    #create message
+    op = b'2'
+    htype = b'1'
+    hlen = b'6'
+    hops = b'0'
+    #xid = bstr(random.randint(1243,2324)) if order == 'DHCPDISCOVER' else OFFER_elements['xid']
+    xid = bytes(DISCOVER_elements['xid'], 'utf-8')
+    secs = b'00'
+    flags = bytes(DISCOVER_elements['flags'], 'utf-8') 
+    ciaddr = b'0000' # Client IP address ---> only filled in if client is in BOUND, RENEW or REBINDING state and can respond to ARP requests.
+    ip = IPP.getFreeAddress(12)
+    #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
+    yiaddr = socket.inet_aton(ip)
+    print(ip)
+    #yiaddr = bytes(IPP.getFreeAddress(12), 'utf-8')
+    siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
+    giaddr = bytes(DISCOVER_elements['giaddr'], 'utf-8')
+    print(giaddr)
+    chaddr = bytes(DISCOVER_elements['chaddr'], 'utf-8')
+    print(chaddr)
+    sname = b'0' * 64 # Optional server host name, null terminated string.
+    file = b'0' * 128 # Boot file name, null terminated string; "generic" name or null in DHCPDISCOVER, fully qualified directory-path name in DHCPOFFER.
+    
+    #option 53 : message type  = discover ; code = 35 (53 in decimal), length = 01 = 1 octet (adica 2 litere in hexa) , 01 e valoarea (dhcp discover)
+    #optiunea 61 : Client Identifier : mostly the chaddr + alte numere;
+    # option 50 : se cere o adresa ip specifica
+    #optiunea 55 parameter request = lista de coduri cu optiunile cerute de client, aici spre exemplu e 1,15,3,6,2,28....
+    options = ''
+    options = b'350101' if order == 'DHCPDISCOVER' else b'350103'
+    options += b'3d078125f59fefac54' + b'3204c0a80004' + b'370c010f0306021c1f2179f92b' + b'ff'  #endmark
+
+    message = op + htype + hlen + hops + xid + secs + flags + ciaddr + yiaddr + siaddr + giaddr + chaddr + sname + file + options
+    return message
     
 def decode_DHCP_message(message):
     message = message.decode()
@@ -208,7 +235,12 @@ def handle_DHCP_message(p_elements):
     if p_elements['options'][0:6] == '350101':
         handle_discover()
 
-make_DHCPOFFER_message('','')
+# read configs
+configsObject = read_configs('configs.json')
+black_list = configsObject['black_list']
+
+# make initial ips
+IPP = IP_Pool(configsObject)
 
 # Create a datagram socket
 UDPServerSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -219,9 +251,14 @@ print("UDP server up and listening")
 
 # Listen for incoming datagrams
 while(True):
-    p = UDPServerSocket.recvfrom(4096)
-    print('Packet Received.')
-    p_elements = decode_DHCP_message(p[0])
-    print(p_elements['options'][0:6])
-    # Sending a reply to client
+    DISCOVER_message = UDPServerSocket.recvfrom(4096)
+    print('DISCOVER message Received.')
+    DISCOVER_message_elements = decode_DHCP_message(DISCOVER_message[0])
+    print(DISCOVER_message_elements['options'][0:6])
+
+    # Send a DHCPOFFER message to client
+    DHCPOffer_message = make_DHCPOFFER_message('',DISCOVER_message_elements)
+    UDPServerSocket.sendto(DHCPOffer_message, ('localhost', 22))
+    print('DHCPOFFER message Sent.')
+
 
