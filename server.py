@@ -37,6 +37,8 @@ class IP_Pool:
     def __init__(self, configsObject):
         self.addressIP = [] # here we will store the ip addresses generated following the network address and the mask
         self.reserved_ips = []
+        self.black_list = configsObject["black_list"]
+
         # reserve ips for macs
         self.reserve_ips(configsObject['reservation_list'])
 
@@ -112,17 +114,26 @@ class IP_Pool:
         ip = None
         for _ip in self.addressIP:
             if _ip.free is True and _ip.keep is False:
-                _ip.setMac(_mac)
-                _ip.set_IP_unavailable()
+                #_ip.setMac(_mac)
+                #_ip.set_IP_unavailable()
                 ip = _ip
                 break
         return ip.ip
+    
+    def assign_IPAddress(self, _ip, _mac):
+        IPObj = self.findIPObjByIPAddr(_ip)
+        if IPObj.free is True and IPObj.keep is False:
+            IPObj.setMac(_mac)
+            IPObj.set_IP_unavailable()
+            print('YAay')
+            return _ip
+        return None 
 
-    def getIPAddress(self, option50, _mac):
+    def getIPAddress(self, _mac):
         """
         Function that returns an IPAddress object and takes into account the following:
         1)We first check if the machine requesting an IP address is among those that have statically assigned an IP address and that is always up to them.
-        2)We check the car's preference by analyzing option 50, if it exists
+        2)If the machine requesting an IP address is in the black list and we can't assign an IP to it.
         3)If none of the above returns an IP to the machine, it means that we can assign any IP from our address pool.
         """
         return_ip =""
@@ -130,23 +141,19 @@ class IP_Pool:
         staticIp = self.findIPByMac(_mac)
         if len(staticIp) != 0:
             staticIp = staticIp.pop()
-            staticIp.set_IP_unavailable()
-            staticIp.keep_IP_address()
-            return_ip = staticIp.ip
+            if staticIp in self.reserved_ips:
+            #staticIp.set_IP_unavailable()
+            #staticIp.keep_IP_address()
+                return_ip = staticIp.ip
 
-        # it's not about static binding, so we try to satisfy the customer's request
-        elif 50 in option50 :
-            requested = self.findIPObjByIPAddr(option50[50])
-            if requested != None:
-                if requested.free == True and requested.keep == False:
-                    requested.setMac(_mac)
-                    requested.set_IP_unavailable()
-                    return_ip = requested.ip
-
+        # if mac address is in the black list
+        if _mac in self.black_list:
+            return None
+            
         # we assign a random address
         if return_ip == "":
             return_ip= self.getFreeAddress(_mac)
-
+            print('OOOOOOOO {}'.format(return_ip))
         return return_ip
 
     def findIPObjByIPAddr(self, _ip):
@@ -183,16 +190,21 @@ def make_DHCPOFFER_message(order, DISCOVER_elements):
     secs = b'00'
     flags = bytes(DISCOVER_elements['flags'], 'utf-8') 
     ciaddr = b'0000' # Client IP address ---> only filled in if client is in BOUND, RENEW or REBINDING state and can respond to ARP requests.
-    ip = IPP.getFreeAddress(12)
-    #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
-    yiaddr = socket.inet_aton(ip)
-    print(ip)
+    yiaddr = ''
+    if order == 'OFFER':
+        ip = IPP.getIPAddress(DISCOVER_elements['ciaddr'])
+        #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
+        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
+        print(ip)
+    elif order == 'ACK':
+        ip = IPP.assign_IPAddress(DISCOVER_elements['yiaddr'], DISCOVER_elements['ciaddr'])
+        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
+        print(ip)
+
     #yiaddr = bytes(IPP.getFreeAddress(12), 'utf-8')
     siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
     giaddr = bytes(DISCOVER_elements['giaddr'], 'utf-8')
-    print(giaddr)
     chaddr = bytes(DISCOVER_elements['chaddr'], 'utf-8')
-    print(chaddr)
     sname = b'0' * 64 # Optional server host name, null terminated string.
     file = b'0' * 128 # Boot file name, null terminated string; "generic" name or null in DHCPDISCOVER, fully qualified directory-path name in DHCPOFFER.
     
@@ -208,23 +220,25 @@ def make_DHCPOFFER_message(order, DISCOVER_elements):
     return message
     
 def decode_DHCP_message(message):
-    message = message.decode()
+    message_p1 = message[:16].decode()
     elements = {}
-    elements['op'] = message[0]
-    elements['htype'] = message[1]
-    elements['hlen'] = message[2]
-    elements['hops'] = message[3]
-    elements['xid'] = message[4:8]
-    elements['secs'] = message[8:10]
-    elements['flags'] = message[10:12]
-    elements['ciaddr'] = message[12:16]
-    elements['yiaddr'] = message[16:20]
-    elements['siaddr'] = message[20:24]
-    elements['giaddr'] = message[24:28]
-    elements['chaddr'] = message[28:44]
-    elements['sname'] = message[44:108]
-    elements['file'] = message[108:236]
-    elements['options'] = message[236:]
+    elements['op'] = message_p1[0]
+    elements['htype'] = message_p1[1]
+    elements['hlen'] = message_p1[2]
+    elements['hops'] = message_p1[3]
+    elements['xid'] = message_p1[4:8]
+    elements['secs'] = message_p1[8:10]
+    elements['flags'] = message_p1[10:12]
+    elements['ciaddr'] = message_p1[12:16]
+    elements['yiaddr'] = socket.inet_ntoa(message[16:20])
+    message_p2 = message[20:].decode()
+    #elements['yiaddr'] = message_p2[16:20]
+    elements['siaddr'] = message_p2[0:4]
+    elements['giaddr'] = message_p2[4:8]
+    elements['chaddr'] = message_p2[8:24]
+    elements['sname'] = message_p2[24:88]
+    elements['file'] = message_p2[88:216]
+    elements['options'] = message_p2[216:]
 
     return elements
 
@@ -251,14 +265,25 @@ print("UDP server up and listening")
 
 # Listen for incoming datagrams
 while(True):
+    # Receive DHCPDISCOVER message from client
     DISCOVER_message = UDPServerSocket.recvfrom(4096)
-    print('DISCOVER message Received.')
+    print('Received DISCOVER message.')
     DISCOVER_message_elements = decode_DHCP_message(DISCOVER_message[0])
     print(DISCOVER_message_elements['options'][0:6])
 
     # Send a DHCPOFFER message to client
-    DHCPOffer_message = make_DHCPOFFER_message('',DISCOVER_message_elements)
+    DHCPOffer_message = make_DHCPOFFER_message('OFFER',DISCOVER_message_elements)
     UDPServerSocket.sendto(DHCPOffer_message, ('localhost', 22))
-    print('DHCPOFFER message Sent.')
+    print('Sent DHCPOFFER message.')
+
+    # Receive DHCPREQUEST message from client
+    DHCPREQUEST_message = UDPServerSocket.recvfrom(4096)
+    print('Received DHCPREQUEST message.')
+    DHCPREQUEST_message_elements = decode_DHCP_message(DHCPREQUEST_message[0])
+
+    # Send a DHCPACK message to client
+    DHCPAck_message = make_DHCPOFFER_message('ACK', DHCPREQUEST_message_elements)
+    UDPServerSocket.sendto(DHCPAck_message, ('localhost', 22))
+    print('Sent DHCPACK message.')
 
 

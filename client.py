@@ -26,13 +26,15 @@ def make_DHCP_message(configsObject, order, OFFER_elements):
     hops = b'0'
     # Transaction ID, a random number chosen by the client, used by the client and server to associate messages and responses between a client and a server.
     #xid = bstr(random.randint(1243,2324)) if order == 'DHCPDISCOVER' else OFFER_elements['xid']
-    xid = b'48a1'
+    xid = bytes(OFFER_elements['xid'], 'utf-8') if OFFER_elements is not None else  b'48a1'
     # Filled in by client, seconds elapsed since client began address acquisition or renewal process.
     secs = b'00'
     # set broadcast flag
     flags = b'80' 
     ciaddr = b'0000' # Client IP address ---> only filled in if client is in BOUND, RENEW or REBINDING state and can respond to ARP requests.
-    yiaddr = b'0000' # 'your' (client) IP address.
+    if order == 'DHCPREQUEST':
+        print(OFFER_elements['yiaddr'])
+    yiaddr = b'0000' if order == 'DHCPDISCOVER' else socket.inet_aton(OFFER_elements['yiaddr']) # 'your' (client) IP address.
     siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
     giaddr = b'0000' # Relay agent IP address, used in booting via a relay agent.
     chaddr = b'000000ff7d878c2f' # Client hardware address. ---> Ethernet
@@ -83,9 +85,9 @@ client_socket.bind((IP, Port))
 print("\nC:About to send a discover message")
 
 # Send DHCPDISCOVER
-message = make_DHCP_message(configsObject, 'DHCPDISCOVER', '')
+message = make_DHCP_message(configsObject, 'DHCPDISCOVER', None)
 client_socket.sendto(message, ('localhost', 21))
-print("\nDHCPDISCOVER sent")
+print("\nSent DHCPDISCOVER")
 
 
 ID = 2324
@@ -96,7 +98,17 @@ xid = random.randint(1243,2324) if order == 'DHCPOFFER' else OFFER_elements['xid
 
 # Receive DHCPOFFER
 DHCPOFFER_message = client_socket.recvfrom(4096)
-print('DHCPOFFER message Received.')
+print('Received DHCPOFFER message.')
 DHCPOFFER_message_elements = decode_DHCP_message(DHCPOFFER_message[0])
-print(DHCPOFFER_message_elements['yiaddr'])
+
+# Send DHCPREQUEST
+DHCPREQUEST_message = make_DHCP_message(configsObject, 'DHCPREQUEST', DHCPOFFER_message_elements)
+client_socket.sendto(DHCPREQUEST_message, ('localhost', 21))
+print("\nSent DHCPREQUEST")
+
+# Receive DHCPACK
+DHCPACK_message = client_socket.recvfrom(4096)
+print('Received DHCPACK message.')
+DHCPACK_message_elements = decode_DHCP_message(DHCPACK_message[0])
+print(DHCPACK_message_elements['yiaddr'])
 
