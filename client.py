@@ -2,10 +2,15 @@ import json
 from os import PathLike
 import random
 import socket
-import binascii
+import binascii, time, random
+from threading import Thread
+
 
 IP     = "localhost"
 Port   = 22
+backoff_cutoff = 120
+initial_interval = 10 
+main_IP = None
 
 def read_configs(file_name):
     with open(file_name) as jsonFile:
@@ -84,31 +89,49 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client_socket.bind((IP, Port))
 print("\nC:About to send a discover message")
 
-# Send DHCPDISCOVER
-message = make_DHCP_message(configsObject, 'DHCPDISCOVER', None)
-client_socket.sendto(message, ('localhost', 21))
-print("\nSent DHCPDISCOVER")
+def communicate():
+    global main_IP
+    # Send DHCPDISCOVER
+    message = make_DHCP_message(configsObject, 'DHCPDISCOVER', None)
+    client_socket.sendto(message, ('localhost', 21))
+    print("\nSent DHCPDISCOVER")
 
+    ID = 2324
+    order = 'DHCPOFFER'
+    OFFER_elements = ''
+    xid = random.randint(1243,2324) if order == 'DHCPOFFER' else OFFER_elements['xid']
+    #print(len("{:01b}".format(1) + "{:015b}".format(0)))
 
-ID = 2324
-order = 'DHCPOFFER'
-OFFER_elements = ''
-xid = random.randint(1243,2324) if order == 'DHCPOFFER' else OFFER_elements['xid']
-#print(len("{:01b}".format(1) + "{:015b}".format(0)))
+    # Receive DHCPOFFER
+    DHCPOFFER_message = client_socket.recvfrom(4096)
+    print('Received DHCPOFFER message.')
+    DHCPOFFER_message_elements = decode_DHCP_message(DHCPOFFER_message[0])
 
-# Receive DHCPOFFER
-DHCPOFFER_message = client_socket.recvfrom(4096)
-print('Received DHCPOFFER message.')
-DHCPOFFER_message_elements = decode_DHCP_message(DHCPOFFER_message[0])
+    # Send DHCPREQUEST
+    DHCPREQUEST_message = make_DHCP_message(configsObject, 'DHCPREQUEST', DHCPOFFER_message_elements)
+    client_socket.sendto(DHCPREQUEST_message, ('localhost', 21))
+    print("\nSent DHCPREQUEST")
 
-# Send DHCPREQUEST
-DHCPREQUEST_message = make_DHCP_message(configsObject, 'DHCPREQUEST', DHCPOFFER_message_elements)
-client_socket.sendto(DHCPREQUEST_message, ('localhost', 21))
-print("\nSent DHCPREQUEST")
+    # Receive DHCPACK
+    DHCPACK_message = client_socket.recvfrom(4096)
+    print('Received DHCPACK message.')
+    DHCPACK_message_elements = decode_DHCP_message(DHCPACK_message[0])
+    print(DHCPACK_message_elements['yiaddr'])
+    main_IP = DHCPACK_message_elements['yiaddr']
 
-# Receive DHCPACK
-DHCPACK_message = client_socket.recvfrom(4096)
-print('Received DHCPACK message.')
-DHCPACK_message_elements = decode_DHCP_message(DHCPACK_message[0])
-print(DHCPACK_message_elements['yiaddr'])
-
+# initial communication  
+thread = Thread(target = communicate())
+thread.start()
+thread.join()
+# start timer
+t0 = time.time()
+while True:
+    t1 = time.time()
+    if t1 - t0 > initial_interval and main_IP is None:
+        thread = Thread(target = communicate())
+        thread.start()
+        thread.join()
+        # update initial_interval
+        if initial_interval < backoff_cutoff:
+            rand = random.uniform(0, 1)
+            initial_interval = rand*2*initial_interval

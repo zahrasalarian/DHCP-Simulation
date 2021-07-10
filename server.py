@@ -1,9 +1,12 @@
-import socket, json, sys
+import socket, json, sys, copy, time
+from threading import Thread
+
 sys.path.append(".")
 
 IP     = 'localhost'
 Port   = 21
 bufferSize = 3000
+clients_information = {}
 
 import math, json
 
@@ -162,6 +165,13 @@ class IP_Pool:
             if ip.ip == _ip:
                 return ip
         return None
+    
+    def free_IP(self, _ip):
+        ipObj = self.findIPObjByIPAddr(_ip)
+        if ipObj in self.reserved_ips: 
+            ipObj.make_IP_available()
+        else:
+            ipObj.release_IP_address()
 
     def findIPByMac(self, _mac):
         return [ip for ip in self.addressIP if ip.mac == _mac]
@@ -175,11 +185,6 @@ def read_configs(file_name):
     return jsonObject
 
 def make_DHCPOFFER_message(order, DISCOVER_elements):
-    #macid = DISCOVER_elements['chaddr']
-    #if macid in black_list:
-    #    print('You are blocked')
-    #    return
-
     #create message
     op = b'2'
     htype = b'1'
@@ -200,7 +205,9 @@ def make_DHCPOFFER_message(order, DISCOVER_elements):
         ip = IPP.assign_IPAddress(DISCOVER_elements['yiaddr'], DISCOVER_elements['ciaddr'])
         yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
         print(ip)
-
+        macAddr = DISCOVER_elements['ciaddr']
+        clients_information[macAddr] = [DISCOVER_elements['xid'], configsObject['lease_time'], ip]
+    
     #yiaddr = bytes(IPP.getFreeAddress(12), 'utf-8')
     siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
     giaddr = bytes(DISCOVER_elements['giaddr'], 'utf-8')
@@ -249,6 +256,32 @@ def handle_DHCP_message(p_elements):
     if p_elements['options'][0:6] == '350101':
         handle_discover()
 
+def show_clients():
+    for mac, inf in clients_information():
+        print('Computer name: {}\nMac Address: {}\nIP Address: {}\nExpire Time: {}'.format(inf[0], mac, inf[2], inf[1]))
+
+class decrease_lease_t(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        self.daemon = True
+        self.start()
+
+    def decrease_lease_t():
+        t0 = time.time()
+        while True:
+            t1 = time.time()
+            if t1 - t0 > 1:
+                cic = copy.deepcopy(clients_information)
+                for mac, inf in cic():
+                    #reamain_time = inf[1]
+                    clients_information[mac][1] -= (t1 - t0)
+                    if clients_information[mac][1] <= 0:
+                        ip = clients_information[mac][2]
+                        IP_Pool.free_IP(ip)
+                        del clients_information[mac]
+            t0 = t1
+
+
 # read configs
 configsObject = read_configs('configs.json')
 black_list = configsObject['black_list']
@@ -261,7 +294,10 @@ UDPServerSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
 
 # Bind to address and ip
 UDPServerSocket.bind((IP, Port))
-print("UDP server up and listening")
+print("UDP server is up and listening")
+
+# start thread for decreasing lease times
+decrease_lease_t()
 
 # Listen for incoming datagrams
 while(True):
