@@ -3,10 +3,11 @@ from threading import Thread
 
 sys.path.append(".")
 
-IP     = 'localhost'
-Port   = 21
+IP     = "127.0.0.1"
+Port   = 31
 bufferSize = 3000
 clients_information = {}
+clients_information_tmp = {}
 
 import math, json
 
@@ -138,10 +139,11 @@ class IP_Pool:
         Function that returns an IPAddress object and takes into account the following:
         1)We first check if the machine requesting an IP address is among those that have statically assigned an IP address and that is always up to them.
         2)If the machine requesting an IP address is in the black list and we can't assign an IP to it.
-        3)If none of the above returns an IP to the machine, it means that we can assign any IP from our address pool.
+        3)If the machine requesting an IP address already has an IP, we assign the old IP again and renew the lease time.
+        4)If none of the above returns an IP to the machine, it means that we can assign any IP from our address pool.
         """
         return_ip =""
-        # if the same ip is assigned to a car (static binding)
+        # if the mac reserved an IP
         staticIp = self.findIPByMac(_mac)
         if len(staticIp) != 0:
             staticIp = staticIp.pop()
@@ -153,10 +155,14 @@ class IP_Pool:
         # if mac address is in the black list
         if _mac in self.black_list:
             return None
-            
+        
+        # if mac already has an IP
+        mac_ip = self.findIPByMac(_mac)
+        if len(mac_ip) != 0:
+            return_ip = mac_ip[0].ip
         # we assign a random address
         if return_ip == "":
-            return_ip= self.getFreeAddress(_mac)
+            return_ip = self.getFreeAddress(_mac)
             print('OOOOOOOO {}'.format(return_ip))
         return return_ip
 
@@ -197,31 +203,25 @@ def make_DHCPOFFER_message(order, DISCOVER_elements):
     flags = bytes(DISCOVER_elements['flags'], 'utf-8') 
     ciaddr = b'0000' # Client IP address ---> only filled in if client is in BOUND, RENEW or REBINDING state and can respond to ARP requests.
     yiaddr = ''
-    if order == 'OFFER':
-        ip = IPP.getIPAddress(DISCOVER_elements['ciaddr'])
-        #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
-        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
-        print(ip)
-    elif order == 'ACK':
-        ip = IPP.assign_IPAddress(DISCOVER_elements['yiaddr'], DISCOVER_elements['ciaddr'])
-        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
-        print(ip)
-        macAddr = DISCOVER_elements['ciaddr']
-        clients_information[macAddr] = [DISCOVER_elements['xid'], configsObject['lease_time'], ip]
-    
     #yiaddr = bytes(IPP.getFreeAddress(12), 'utf-8')
     siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
     giaddr = bytes(DISCOVER_elements['giaddr'], 'utf-8')
     chaddr = bytes(DISCOVER_elements['chaddr'], 'utf-8')
+    if order == 'OFFER':
+        ip = IPP.getIPAddress(DISCOVER_elements['chaddr'])
+        #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
+        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
+        print(ip)
+    elif order == 'ACK':
+        ip = IPP.assign_IPAddress(DISCOVER_elements['yiaddr'], DISCOVER_elements['chaddr'])
+        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
+        print(ip)
+        macAddr = DISCOVER_elements['chaddr']
+        clients_information_tmp[macAddr] = [DISCOVER_elements['xid'], configsObject['lease_time'], ip]
     sname = b'0' * 64 # Optional server host name, null terminated string.
     file = b'0' * 128 # Boot file name, null terminated string; "generic" name or null in DHCPDISCOVER, fully qualified directory-path name in DHCPOFFER.
-    
-    #option 53 : message type  = discover ; code = 35 (53 in decimal), length = 01 = 1 octet (adica 2 litere in hexa) , 01 e valoarea (dhcp discover)
-    #optiunea 61 : Client Identifier : mostly the chaddr + alte numere;
-    # option 50 : se cere o adresa ip specifica
-    #optiunea 55 parameter request = lista de coduri cu optiunile cerute de client, aici spre exemplu e 1,15,3,6,2,28....
     options = ''
-    options = b'350101' if order == 'DHCPDISCOVER' else b'350103'
+    options = b'000000'
     options += b'3d078125f59fefac54' + b'3204c0a80004' + b'370c010f0306021c1f2179f92b' + b'ff'  #endmark
 
     message = op + htype + hlen + hops + xid + secs + flags + ciaddr + yiaddr + siaddr + giaddr + chaddr + sname + file + options
@@ -262,16 +262,25 @@ def show_clients():
         print('Computer name: {}\nMac Address: {}\nIP Address: {}\nExpire Time: {}'.format(inf[0], mac, inf[2], inf[1]))
 
 def decrease_lease_t():
+    global clients_information_tmp
     t0 = time.time()
     print('Starting timer...')
     while True:
-        t1 = time.time()            
+        t1 = time.time()
+        if len(clients_information_tmp) != 0:
+            for mac, inf in clients_information_tmp.items():
+                clients_information[mac] = inf
+            clients_information_tmp = {}
         cic = copy.deepcopy(clients_information)
         for mac, inf in cic.items():
             #reamain_time = inf[1]
             clients_information[mac][1] -= (t1 - t0)
             if clients_information[mac][1] <= 0:
                 ip = clients_information[mac][2]
+                if ip is None:
+                    del clients_information[mac]
+                    print('FREED {}'.format(ip))
+                    continue
                 IPP.free_IP(ip)
                 del clients_information[mac]
                 print('FREED {}'.format(ip))
@@ -288,6 +297,7 @@ IPP = IP_Pool(configsObject)
 
 # Create a datagram socket
 UDPServerSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+UDPServerSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 # Bind to address and ip
 UDPServerSocket.bind((IP, Port))
@@ -297,27 +307,52 @@ print("UDP server is up and listening")
 thread = Thread(target = decrease_lease_t)
 thread.start()
 
+def handle_client():
+    message_type = None
+    received_message_elements = decode_DHCP_message(received_message[0])
+    clinet_port = int(received_message_elements['options'][-2:])
+    print(clinet_port)
+    if received_message_elements['options'][0:6] == '350101':
+        message_type = 'OFFER'
+        print('Received DISCOVER message.')
+
+        # Send a DHCPOFFER message to client
+        DHCPOffer_message = make_DHCPOFFER_message('OFFER', received_message_elements)
+        UDPServerSocket.sendto(DHCPOffer_message, ('255.255.255.255', clinet_port))
+        print('Sent DHCPOFFER message.')
+        
+    elif received_message_elements['options'][0:6] == '350103':
+        message_type = 'ACK'
+        print('Received DHCPREQUEST message.')
+
+        # Send a DHCPACK message to client
+        DHCPAck_message = make_DHCPOFFER_message('ACK', received_message_elements)
+        UDPServerSocket.sendto(DHCPAck_message, ('255.255.255.255', clinet_port))
+        print('Sent DHCPACK message.')
+
 # Listen for incoming datagrams
+received_message = ''
 while(True):
     # Receive DHCPDISCOVER message from client
-    DISCOVER_message = UDPServerSocket.recvfrom(4096)
-    print('Received DISCOVER message.')
-    DISCOVER_message_elements = decode_DHCP_message(DISCOVER_message[0])
-    print(DISCOVER_message_elements['options'][0:6])
+    received_message = UDPServerSocket.recvfrom(4096)
+    thread = Thread(target = handle_client)
+    thread.start()
+    #DISCOVER_message_elements = decode_DHCP_message(DISCOVER_message[0])
+    #print(DISCOVER_message_elements['options'][0:6])
 
     # Send a DHCPOFFER message to client
-    DHCPOffer_message = make_DHCPOFFER_message('OFFER',DISCOVER_message_elements)
-    UDPServerSocket.sendto(DHCPOffer_message, ('localhost', 22))
-    print('Sent DHCPOFFER message.')
+    #DHCPOffer_message = make_DHCPOFFER_message('OFFER',DISCOVER_message_elements)
+    #UDPServerSocket.sendto(DHCPOffer_message, ('255.255.255.255', 32))
+    #print('Sent DHCPOFFER message.')
 
     # Receive DHCPREQUEST message from client
-    DHCPREQUEST_message = UDPServerSocket.recvfrom(4096)
-    print('Received DHCPREQUEST message.')
-    DHCPREQUEST_message_elements = decode_DHCP_message(DHCPREQUEST_message[0])
+    #DHCPREQUEST_message = UDPServerSocket.recvfrom(4096)
+    #print('Received DHCPREQUEST message.')
+    #DHCPREQUEST_message_elements = decode_DHCP_message(DHCPREQUEST_message[0])
 
     # Send a DHCPACK message to client
-    DHCPAck_message = make_DHCPOFFER_message('ACK', DHCPREQUEST_message_elements)
-    UDPServerSocket.sendto(DHCPAck_message, ('localhost', 22))
-    print('Sent DHCPACK message.')
+    #DHCPAck_message = make_DHCPOFFER_message('ACK', DHCPREQUEST_message_elements)
+    #UDPServerSocket.sendto(DHCPAck_message, ('255.255.255.255', 32))
+    #print('Sent DHCPACK message.')
 
 
