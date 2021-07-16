@@ -31,6 +31,7 @@ class IP_Handler:
         self.free = True
 
     def release_IP_address(self):
+        self.free = True
         self.keep = False
         self.mac = ""
 
@@ -262,7 +263,7 @@ def show_clients():
 
 def decrease_lease_t():
     t0 = time.time()
-    print('oh')
+    print('Starting timer...')
     while True:
         t1 = time.time()            
         cic = copy.deepcopy(clients_information)
@@ -273,7 +274,7 @@ def decrease_lease_t():
                 ip = clients_information[mac][2]
                 IPP.free_IP(ip)
                 del clients_information[mac]
-                print('freed {}'.format(ip))
+                print('FREED {}'.format(ip))
 
         t0 = t1
 
