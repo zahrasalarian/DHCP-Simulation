@@ -260,26 +260,22 @@ def show_clients():
     for mac, inf in clients_information():
         print('Computer name: {}\nMac Address: {}\nIP Address: {}\nExpire Time: {}'.format(inf[0], mac, inf[2], inf[1]))
 
-class decrease_lease_t(Thread):
-    def __init__(self):
-        Thread.__init__(self)
-        self.daemon = True
-        self.start()
+def decrease_lease_t():
+    t0 = time.time()
+    print('oh')
+    while True:
+        t1 = time.time()            
+        cic = copy.deepcopy(clients_information)
+        for mac, inf in cic.items():
+            #reamain_time = inf[1]
+            clients_information[mac][1] -= (t1 - t0)
+            if clients_information[mac][1] <= 0:
+                ip = clients_information[mac][2]
+                IPP.free_IP(ip)
+                del clients_information[mac]
+                print('freed {}'.format(ip))
 
-    def decrease_lease_t():
-        t0 = time.time()
-        while True:
-            t1 = time.time()
-            if t1 - t0 > 1:
-                cic = copy.deepcopy(clients_information)
-                for mac, inf in cic():
-                    #reamain_time = inf[1]
-                    clients_information[mac][1] -= (t1 - t0)
-                    if clients_information[mac][1] <= 0:
-                        ip = clients_information[mac][2]
-                        IP_Pool.free_IP(ip)
-                        del clients_information[mac]
-            t0 = t1
+        t0 = t1
 
 
 # read configs
@@ -297,7 +293,8 @@ UDPServerSocket.bind((IP, Port))
 print("UDP server is up and listening")
 
 # start thread for decreasing lease times
-decrease_lease_t()
+thread = Thread(target = decrease_lease_t)
+thread.start()
 
 # Listen for incoming datagrams
 while(True):

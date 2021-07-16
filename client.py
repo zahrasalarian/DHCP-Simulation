@@ -11,6 +11,7 @@ Port   = 22
 backoff_cutoff = 120
 initial_interval = 10 
 main_IP = None
+start_time = None
 
 def read_configs(file_name):
     with open(file_name) as jsonFile:
@@ -91,6 +92,7 @@ print("\nC:About to send a discover message")
 
 def communicate():
     global main_IP
+    global start_time
     # Send DHCPDISCOVER
     message = make_DHCP_message(configsObject, 'DHCPDISCOVER', None)
     client_socket.sendto(message, ('localhost', 21))
@@ -118,20 +120,48 @@ def communicate():
     DHCPACK_message_elements = decode_DHCP_message(DHCPACK_message[0])
     print(DHCPACK_message_elements['yiaddr'])
     main_IP = DHCPACK_message_elements['yiaddr']
+    start_time = time.time()
+
+def decrease_lease_t():
+    global main_IP
+    global start_time
+    lease_time = configsObject['lease_time']
+    while True:
+        t1 = time.time()
+        if start_time is not None and IP is not None:
+            if t1 - start_time >= lease_time:
+                main_IP = None
+                start_time = None
+
+# start decreasing lease_time
+#thread_1 = Thread(target = decrease_lease_t)
+#thread_1.start
 
 # initial communication  
-thread = Thread(target = communicate())
+thread = Thread(target = communicate)
 thread.start()
-thread.join()
+#thread.join()
 # start timer
 t0 = time.time()
+lease_time = configsObject['lease_time']
 while True:
     t1 = time.time()
     if t1 - t0 > initial_interval and main_IP is None:
-        thread = Thread(target = communicate())
+        print("yssssssss")
+        print(t1 - t0)
+        thread = Thread(target = communicate)
         thread.start()
-        thread.join()
+        #thread.join()
         # update initial_interval
+        t0 = t1
         if initial_interval < backoff_cutoff:
             rand = random.uniform(0, 1)
             initial_interval = rand*2*initial_interval
+
+    # check lease time
+    t1_lt = time.time()
+    if start_time is not None and IP is not None:
+        if t1_lt - start_time >= lease_time:
+            print('freed {}'.format(main_IP))
+            main_IP = None
+            start_time = None
