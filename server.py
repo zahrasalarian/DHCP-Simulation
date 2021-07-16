@@ -127,6 +127,8 @@ class IP_Pool:
     
     def assign_IPAddress(self, _ip, _mac):
         IPObj = self.findIPObjByIPAddr(_ip)
+        if IPObj is None:
+            return None 
         if IPObj.free is True and IPObj.keep is False:
             IPObj.setMac(_mac)
             IPObj.set_IP_unavailable()
@@ -167,7 +169,6 @@ class IP_Pool:
         return return_ip
 
     def findIPObjByIPAddr(self, _ip):
-        return_ip = ""
         for ip in self.addressIP:
             if ip.ip == _ip:
                 return ip
@@ -182,8 +183,6 @@ class IP_Pool:
 
     def findIPByMac(self, _mac):
         return [ip for ip in self.addressIP if ip.mac == _mac]
-# if __name__ == '__main__':
-#     ap = AddressPool("192.168.1.0", "255.255.255.0")
 
 def read_configs(file_name):
     with open(file_name) as jsonFile:
@@ -210,18 +209,22 @@ def make_DHCPOFFER_message(order, DISCOVER_elements):
     if order == 'OFFER':
         ip = IPP.getIPAddress(DISCOVER_elements['chaddr'])
         #yiaddr = bytes(map(int,IPP.getFreeAddress(12).split('.')))
+        if ip is None:
+            return None
         yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
         print(ip)
     elif order == 'ACK':
         ip = IPP.assign_IPAddress(DISCOVER_elements['yiaddr'], DISCOVER_elements['chaddr'])
-        yiaddr = socket.inet_aton(ip) if ip is not None else b'0000'
+        if ip is None:
+            return None
+        yiaddr = socket.inet_aton(ip)
         print(ip)
         macAddr = DISCOVER_elements['chaddr']
         clients_information_tmp[macAddr] = [DISCOVER_elements['xid'], configsObject['lease_time'], ip]
     sname = b'0' * 64 # Optional server host name, null terminated string.
     file = b'0' * 128 # Boot file name, null terminated string; "generic" name or null in DHCPDISCOVER, fully qualified directory-path name in DHCPOFFER.
     options = ''
-    options = b'000000'
+    options = b'350102' if order == 'OFFER' else b'350105'
     options += b'3d078125f59fefac54' + b'3204c0a80004' + b'370c010f0306021c1f2179f92b' + b'ff'  #endmark
 
     message = op + htype + hlen + hops + xid + secs + flags + ciaddr + yiaddr + siaddr + giaddr + chaddr + sname + file + options
@@ -284,9 +287,15 @@ def decrease_lease_t():
                 IPP.free_IP(ip)
                 del clients_information[mac]
                 print('FREED {}'.format(ip))
-
         t0 = t1
 
+def show_clients():
+    while True:
+        if input() == 'show clients':
+            print('#######################################')
+            for client, value in clients_information.items():
+                print("Mac Address: {}, Name: {}, Remaind time to lease: {}, IP: {}\n".format(client, value[0], value[1], value[2]))
+            print('#######################################')
 
 # read configs
 configsObject = read_configs('configs.json')
@@ -303,6 +312,10 @@ UDPServerSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 UDPServerSocket.bind((IP, Port))
 print("UDP server is up and listening")
 
+# thread for show clients
+thread = Thread(target = show_clients)
+thread.start()
+
 # start thread for decreasing lease times
 thread = Thread(target = decrease_lease_t)
 thread.start()
@@ -318,8 +331,9 @@ def handle_client():
 
         # Send a DHCPOFFER message to client
         DHCPOffer_message = make_DHCPOFFER_message('OFFER', received_message_elements)
-        UDPServerSocket.sendto(DHCPOffer_message, ('255.255.255.255', clinet_port))
-        print('Sent DHCPOFFER message.')
+        if DHCPOffer_message is not None:
+            UDPServerSocket.sendto(DHCPOffer_message, ('255.255.255.255', clinet_port))
+            print('Sent DHCPOFFER message.')
         
     elif received_message_elements['options'][0:6] == '350103':
         message_type = 'ACK'
@@ -327,8 +341,9 @@ def handle_client():
 
         # Send a DHCPACK message to client
         DHCPAck_message = make_DHCPOFFER_message('ACK', received_message_elements)
-        UDPServerSocket.sendto(DHCPAck_message, ('255.255.255.255', clinet_port))
-        print('Sent DHCPACK message.')
+        if DHCPAck_message is not None:
+            UDPServerSocket.sendto(DHCPAck_message, ('255.255.255.255', clinet_port))
+            print('Sent DHCPACK message.')
 
 # Listen for incoming datagrams
 received_message = ''

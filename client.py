@@ -1,5 +1,6 @@
 import json
 from os import PathLike
+import math
 import random
 import socket
 import binascii, time, random
@@ -8,10 +9,13 @@ from threading import Thread
 
 IP     = "127.0.0.1"
 Port   = 33
+mac_addr = '000000ff7d878c3f'
 backoff_cutoff = 120
 initial_interval = 10 
 main_IP = None
 start_time = None
+Timeout = 20
+send_req_time = math.inf
 
 def read_configs(file_name):
     with open(file_name) as jsonFile:
@@ -43,7 +47,7 @@ def make_DHCP_message(configsObject, order, OFFER_elements):
     yiaddr = b'0000' if order == 'DHCPDISCOVER' else socket.inet_aton(OFFER_elements['yiaddr']) # 'your' (client) IP address.
     siaddr = b'0000' # IP address of next server to use in bootstrap; returned in DHCPOFFER, DHCPACK by server.
     giaddr = b'0000' # Relay agent IP address, used in booting via a relay agent.
-    chaddr = b'000000ff7d878c3f' # Client hardware address. ---> Ethernet
+    chaddr = bytes(mac_addr, 'utf-8') # Client hardware address. ---> Ethernet
     sname = b'0' * 64 # Optional server host name, null terminated string.
     file = b'0' * 128 # Boot file name, null terminated string; "generic" name or null in DHCPDISCOVER, fully qualified directory-path name in DHCPOFFER.
     options = ''
@@ -91,16 +95,11 @@ print("\nC:About to send a discover message")
 def communicate():
     global main_IP
     global start_time
+    global send_req_time
     # Send DHCPDISCOVER
     message = make_DHCP_message(configsObject, 'DHCPDISCOVER', None)
     client_socket.sendto(message, ('255.255.255.255', 31))
     print("\nSent DHCPDISCOVER")
-
-    ID = 2324
-    order = 'DHCPOFFER'
-    OFFER_elements = ''
-    xid = random.randint(1243,2324) if order == 'DHCPOFFER' else OFFER_elements['xid']
-    #print(len("{:01b}".format(1) + "{:015b}".format(0)))
 
     # Receive DHCPOFFER
     DHCPOFFER_message = client_socket.recvfrom(4096)
@@ -110,6 +109,7 @@ def communicate():
     # Send DHCPREQUEST
     DHCPREQUEST_message = make_DHCP_message(configsObject, 'DHCPREQUEST', DHCPOFFER_message_elements)
     client_socket.sendto(DHCPREQUEST_message, ('255.255.255.255', 31))
+    send_req_time = time.time()
     print("\nSent DHCPREQUEST")
 
     # Receive DHCPACK
@@ -119,6 +119,7 @@ def communicate():
     print(DHCPACK_message_elements['yiaddr'])
     main_IP = DHCPACK_message_elements['yiaddr']
     start_time = time.time()
+    send_req_time = math.inf
 
 def decrease_lease_t():
     global main_IP
@@ -144,7 +145,8 @@ t0 = time.time()
 lease_time = configsObject['lease_time']
 while True:
     t1 = time.time()
-    if t1 - t0 > initial_interval and main_IP is None:
+
+    if (t1 - t0 > initial_interval and main_IP is None) or (t1 - send_req_time > Timeout):
         print("yssssssss")
         print(t1 - t0)
         thread = Thread(target = communicate)
@@ -153,7 +155,7 @@ while True:
         # update initial_interval
         t0 = t1
         if initial_interval < backoff_cutoff:
-            rand = random.uniform(0, 1)
+            rand = random.uniform(0.1, 1)
             initial_interval = rand*2*initial_interval
 
     # check lease time
